@@ -16,26 +16,35 @@
 #define BALL_CHAR L"⚪"
 
 typedef struct {
+  int x;
+  int y;
+} Vec2;
+
+typedef struct {
+  int x;
+  int y;
+  int w;
+  int h;
+} Rect;
+
+typedef struct {
+  Rect rect;
+  Vec2 dir;
   wchar_t* ch;
-  int x, y;
-  int dx, dy;
-  int len, min_len, max_len;
 } Paddle;
 
 typedef struct {
+  Rect rect;
+  Vec2 dir;
   wchar_t* ch;
-  int x, y;
-  int dx, dy;
   int is_launched;
 } Ball;
 
 // Represents the window's position, size, and optional padding
 typedef struct {
-  int padding;              // Space inside the window boundary
-  int x, y;                 // Position of the window (top-left corner)
-  int in_x, in_y;           // border and padding excluded
-  int width, height;        // Dimensions of the window
-  int in_width, in_height;  // border and padding excluded
+  Vec2 padding;
+  Rect rect;
+  Rect inner_rect;
 } WindowConfig;
 
 // Initializes ncurses mode and sets up color, input behavior, and cursor
@@ -54,11 +63,28 @@ void setup_background_color();
 // Initialize the game window configs
 void init_game_win_Conf(WindowConfig* win_conf);
 
+// Draws the window frame (border) and applies background color
+void draw_window(WINDOW*);
+
 // Initilize paddle
 void init_paddle(Paddle* paddle, WindowConfig* win_conf);
 
+// Draw the paddle
+void draw_paddle(WINDOW* win, const Paddle* paddle);
+
+// Keep the paddle within bounds
+void clamp_paddle_bounds(WindowConfig* win_conf, Paddle* paddle);
+
 // Initilize ball
 void init_ball(Ball* ball, Paddle* paddle);
+
+// Draw the ball
+void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle);
+
+void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball);
+
+// check if a point is coll
+void isColliding();
 
 // Validates a pointer and prints an error message with the pointer's name if
 // it's NULL
@@ -66,17 +92,6 @@ void validate_ptr(void* ptr, const char* name);
 
 // Macro to validate a pointer and print its name if NULL.
 #define VALIDATE(ptr) validate_ptr(ptr, #ptr)
-
-// Draws the window frame (border) and applies background color
-void draw_window(WINDOW*);
-
-// Draw the paddle
-void draw_paddle(WINDOW* win, const Paddle* paddle);
-
-// Draw the ball
-void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle);
-
-void clamp_paddle_bounds(WindowConfig* win_conf, Paddle* paddle);
 
 // Returns the inner width of the window, excluding border and padding
 int get_inner_window_width(WindowConfig* win_conf);
@@ -98,8 +113,8 @@ int main() {
   init_game_win_Conf(&game_win_conf);
 
   // Create a new window for the game with the specified height, width, pos
-  WINDOW* game_win = newwin(game_win_conf.height, game_win_conf.width,
-                            game_win_conf.y, game_win_conf.x);
+  WINDOW* game_win = newwin(game_win_conf.rect.h, game_win_conf.rect.w,
+                            game_win_conf.rect.y, game_win_conf.rect.x);
   VALIDATE(game_win);
 
   Paddle paddle;
@@ -126,17 +141,25 @@ int main() {
 
     switch (ch) {
       case KEY_LEFT:
-        paddle.dx = -1;
+        paddle.dir.x = -1;
         break;
       case KEY_RIGHT:
-        paddle.dx = 1;
+        paddle.dir.x = 1;
         break;
+      case KEY_UP:
+        ball.is_launched = 1;
+        ball.dir.y = -1;
+        ball.dir.x = 1;
       default:
         break;
     }
 
-    paddle.x += paddle.dx;
+    paddle.rect.x += paddle.dir.x;
     clamp_paddle_bounds(&game_win_conf, &paddle);
+
+    ball.rect.x += ball.dir.x;
+    ball.rect.y += ball.dir.y;
+    keep_ball_within_bounds(&game_win_conf, &ball);
 
     // Clear previous paddle position and redraw window
     wclear(game_win);
@@ -148,7 +171,7 @@ int main() {
     wrefresh(game_win);
 
     // Small delay to improve smoothness (adjust as needed)
-    napms(1000 / 60);  // Delay for 10 milliseconds
+    napms(1000 / 30);  // Delay for 10 milliseconds
   }
 
   // End ncurses mode, performing any necessary cleanup
@@ -161,12 +184,20 @@ int main() {
 void init_ncurses() {
   initscr();
   start_color();
+  if (!has_colors()) {
+    kill_ncurses();
+    fprintf(stderr, "Your terminal does not support color\n");
+    exit(1);
+  }
+
   cbreak();
   noecho();
   curs_set(0);
   nodelay(stdscr, 1);
   keypad(stdscr, 1);
   init_pair(1, COLOR_WHITE, COLOR_BLACK);
+  // init_pair(2, COLOR_BLUE, COLOR_BLACK);
+  // init_pair(3, COLOR_YELLOW, COLOR_BLACK);
 }
 
 void kill_ncurses() {
@@ -203,44 +234,102 @@ void setup_background_color() {
 }
 
 void init_game_win_Conf(WindowConfig* win_conf) {
-  win_conf->padding = 0;           // Set the window padding
-  win_conf->width = GAME_WIDTH;    // Set the window width
-  win_conf->height = GAME_HEIGHT;  // Set the window height
+  // Set the window padding
+  win_conf->padding.x = 0;
+  win_conf->padding.y = 0;
 
-  win_conf->in_width = get_inner_window_width(win_conf);
-  win_conf->in_height = get_inner_window_height(win_conf);
+  win_conf->rect.w = GAME_WIDTH;   // Set the window width
+  win_conf->rect.h = GAME_HEIGHT;  // Set the window height
+
+  win_conf->inner_rect.w = get_inner_window_width(win_conf);
+  win_conf->inner_rect.h = get_inner_window_height(win_conf);
 
   // Center the window horizontally and vertically in the terminal
-  win_conf->x = get_center_offset(COLS, win_conf->width);
-  win_conf->y = get_center_offset(LINES, win_conf->height);
+  win_conf->rect.x = get_center_offset(COLS, win_conf->rect.w);
+  win_conf->rect.y = get_center_offset(LINES, win_conf->rect.h);
 
-  win_conf->in_x = win_conf->padding + 1;
-  win_conf->in_y = win_conf->padding + 1;
+  win_conf->inner_rect.x = win_conf->padding.x + 1;
+  win_conf->inner_rect.y = win_conf->padding.y + 1;
+}
+
+void draw_window(WINDOW* win) {
+  // Draw a border around the given window using default line characters
+  box(win, 0, 0);
+
+  // Set the window's background using color pair 1
+  wbkgd(win, COLOR_PAIR(1));
+
+  // Refresh the window to apply the border and background changes
+  wrefresh(win);
 }
 
 void init_paddle(Paddle* paddle, WindowConfig* win_conf) {
   paddle->ch = PADDLE_CHAR;
-  paddle->min_len = MIN_PADDLE_SIZE;
-  paddle->max_len = MAX_PADDLE_SIZE;
-  paddle->len = paddle->max_len;
+  paddle->rect.w = MAX_PADDLE_SIZE;
 
-  paddle->x = get_center_offset(win_conf->in_width, paddle->len);
-  paddle->y = win_conf->in_height;
+  paddle->rect.x = get_center_offset(win_conf->inner_rect.w, paddle->rect.w);
+  paddle->rect.y = win_conf->inner_rect.h;
 
-  paddle->dx = 0;
-  paddle->dy = 0;
+  paddle->dir.x = 0;
+  paddle->dir.y = 0;
+}
+
+void draw_paddle(WINDOW* win, const Paddle* paddle) {
+  cchar_t ch;
+  setcchar(&ch, paddle->ch, A_NORMAL, 0, NULL);
+
+  for (int i = 0; i < paddle->rect.w; i++) {
+    mvwadd_wch(win, paddle->rect.y, paddle->rect.x + i, &ch);
+  }
+  wrefresh(win);
+}
+
+void clamp_paddle_bounds(WindowConfig* win_conf, Paddle* paddle) {
+  if (paddle->rect.x < win_conf->inner_rect.x) {
+    paddle->rect.x = win_conf->inner_rect.x;
+  }
+
+  if (paddle->rect.x + paddle->rect.w > win_conf->inner_rect.w) {
+    paddle->rect.x = win_conf->rect.w - paddle->rect.w - 1;
+  }
 }
 
 void init_ball(Ball* ball, Paddle* paddle) {
   ball->ch = BALL_CHAR;
 
-  ball->dx = 0;
-  ball->dy = 0;
+  ball->dir.x = 0;
+  ball->dir.y = 0;
 
-  ball->x = paddle->x + (paddle->len / 2);
-  ball->y = paddle->y - 1;
+  ball->rect.x = paddle->rect.x + (paddle->rect.w / 2);
+  ball->rect.y = paddle->rect.y - 1;
 
   ball->is_launched = 0;
+}
+
+void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle) {
+  cchar_t ch;
+  setcchar(&ch, ball->ch, A_NORMAL, 0, NULL);
+
+  if (ball->is_launched == 0) {
+    ball->rect.x = paddle->rect.x + (paddle->rect.w / 2) - 1;
+    ball->rect.y = paddle->rect.y - 1;
+  }
+
+  mvwadd_wch(win, ball->rect.y, ball->rect.x, &ch);
+
+  wrefresh(win);
+}
+
+void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball) {
+  if (ball->rect.x <= win_conf->inner_rect.x ||
+      ball->rect.x >= win_conf->inner_rect.w) {
+    ball->dir.x *= -1;
+  }
+
+  if (ball->rect.y <= win_conf->inner_rect.y ||
+      ball->rect.y >= win_conf->inner_rect.h) {
+    ball->dir.y *= -1;
+  }
 }
 
 void validate_ptr(void* ptr, const char* name) {
@@ -258,62 +347,18 @@ void validate_ptr(void* ptr, const char* name) {
   }
 }
 
-void draw_window(WINDOW* win) {
-  // Draw a border around the given window using default line characters
-  box(win, 0, 0);
-
-  // Set the window's background using color pair 1
-  wbkgd(win, COLOR_PAIR(1));
-
-  // Refresh the window to apply the border and background changes
-  wrefresh(win);
-}
-
-void draw_paddle(WINDOW* win, const Paddle* paddle) {
-  cchar_t ch;
-  setcchar(&ch, paddle->ch, A_NORMAL, 0, NULL);
-
-  for (int i = 0; i < paddle->len; i++) {
-    mvwadd_wch(win, paddle->y, paddle->x + i, &ch);
-  }
-  wrefresh(win);
-}
-
-void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle) {
-  cchar_t ch;
-  setcchar(&ch, ball->ch, A_NORMAL, 0, NULL);
-
-  int ball_x_pos =
-      (ball->is_launched == 0) ? paddle->x + (paddle->len / 2) - 1 : ball->x;
-  int ball_y_pos = (ball->is_launched == 0) ? paddle->y - 1 : ball->y;
-
-  mvwadd_wch(win, ball_y_pos, ball_x_pos, &ch);
-
-  wrefresh(win);
-}
-
-void clamp_paddle_bounds(WindowConfig* win_conf, Paddle* paddle) {
-  if (paddle->x < win_conf->in_x) {
-    paddle->x = win_conf->in_x;
-  }
-
-  if (paddle->x + paddle->len > win_conf->in_width) {
-    paddle->x = win_conf->width - paddle->len - 1;
-  }
-}
-
 int get_inner_window_width(WindowConfig* win_conf) {
   // Calculate the usable width inside the window by subtracting:
   // - 2 units for the left and right borders
   // - padding on both sides (padding * 2)
-  return win_conf->width - ((win_conf->padding * 2) + 2);
+  return win_conf->rect.w - ((win_conf->padding.x * 2) + 2);
 }
 
 int get_inner_window_height(WindowConfig* win_conf) {
   // Calculate the usable height inside the window by subtracting:
   // - 2 units for the top and bottom borders
   // - padding on both sides (padding * 2)
-  return win_conf->height - ((win_conf->padding * 2) + 2);
+  return win_conf->rect.h - ((win_conf->padding.y * 2) + 2);
 }
 
 int get_center_offset(int outer_len, int inner_len) {
