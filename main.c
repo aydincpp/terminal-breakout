@@ -1,19 +1,27 @@
+#define _XOPEN_SOURCE_EXTENDED 1
+#define _XOPEN_SOURCE 700
+
 #include <locale.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <wchar.h>
 
-#define _XOPEN_SOURCE_EXTENDED 1
 #include "ncursesw/curses.h"
 
 // Define desired game window dimension
 #define GAME_WIDTH 80
 #define GAME_HEIGHT 24
 
-#define MIN_PADDLE_SIZE 10
-#define MAX_PADDLE_SIZE 14
+#define MIN_PADDLE_SIZE 14
+#define MAX_PADDLE_SIZE 18
 #define PADDLE_CHAR L"█"
 
 #define BALL_CHAR L"⚪"
+
+#define BRICK_STRONG L"█"
+#define BRICK_MEDIUM L"▓"
+#define BRICK_WEAK L"░"
+#define BRICK_WIDTH 6
 
 typedef struct {
   int x;
@@ -84,7 +92,7 @@ void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle);
 void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball);
 
 // check if a point is coll
-void isColliding();
+int is_colliding(const Rect* a, const Rect* b);
 
 // Validates a pointer and prints an error message with the pointer's name if
 // it's NULL
@@ -103,7 +111,9 @@ int get_inner_window_height(WindowConfig* win_conf);
 int get_center_offset(int outer_len, int inner_len);
 
 int main() {
+  setenv("TERMINFO", "./vendor/ncurses/build/share/terminfo", 1);
   setlocale(LC_ALL, "");
+
   init_ncurses();
   check_terminal_size();
   setup_background_color();
@@ -159,6 +169,23 @@ int main() {
 
     ball.rect.x += ball.dir.x;
     ball.rect.y += ball.dir.y;
+
+    if (is_colliding(&ball.rect, &paddle.rect)) {
+      int paddle_left = paddle.rect.x;
+      int ball_center = ball.rect.x + ball.rect.w / 2;
+      int zone_width = paddle.rect.w / 3;
+
+      if (ball_center < paddle_left + zone_width) {
+        ball.dir.x = -1;
+      } else if (ball_center < paddle_left + (2 * zone_width)) {
+        ball.dir.x = 0;
+      } else {
+        ball.dir.x = 1;
+      }
+
+      ball.dir.y *= -1;
+    }
+
     keep_ball_within_bounds(&game_win_conf, &ball);
 
     // Clear previous paddle position and redraw window
@@ -300,8 +327,10 @@ void init_ball(Ball* ball, Paddle* paddle) {
   ball->dir.x = 0;
   ball->dir.y = 0;
 
-  ball->rect.x = paddle->rect.x + (paddle->rect.w / 2);
+  ball->rect.x = paddle->rect.x + (paddle->rect.w / 3);
   ball->rect.y = paddle->rect.y - 1;
+  ball->rect.w = wcwidth(ball->ch[0]);
+  ball->rect.h = 1;
 
   ball->is_launched = 0;
 }
@@ -330,6 +359,13 @@ void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball) {
       ball->rect.y >= win_conf->inner_rect.h) {
     ball->dir.y *= -1;
   }
+}
+
+int is_colliding(const Rect* a, const Rect* b) {
+  return !(a->x + a->w < b->x ||  // a is left of b
+           a->x > b->x + b->w ||  // a is right of b
+           a->y + a->h < b->y ||  // a is above b
+           a->y > b->y + b->h);   // a is below b
 }
 
 void validate_ptr(void* ptr, const char* name) {
