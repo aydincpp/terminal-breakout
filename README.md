@@ -1,2 +1,2 @@
 # terminal-brickout
-Simple terminal breakout game
+Simple terminal brickout game
