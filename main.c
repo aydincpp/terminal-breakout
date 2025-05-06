@@ -9,19 +9,23 @@
 #include "ncursesw/curses.h"
 
 // Define desired game window dimension
-#define GAME_WIDTH 80
-#define GAME_HEIGHT 24
+#define GAME_WIDTH 120
+#define GAME_HEIGHT 50
 
 #define MIN_PADDLE_SIZE 14
 #define MAX_PADDLE_SIZE 18
-#define PADDLE_CHAR L"█"
+#define PADDLE_CHAR L"🟪"
 
-#define BALL_CHAR L"⚪"
+#define BALL_CHAR L"⚽"
+#define COLS_NOBORDER (COLS - 2)
 
-#define BRICK_STRONG L"█"
-#define BRICK_MEDIUM L"▓"
-#define BRICK_WEAK L"░"
-#define BRICK_WIDTH 6
+#define BRICK_STRONG L"🟥"
+#define BRICK_MEDIUM L"🟧"
+#define BRICK_WEAK L"🟨"
+#define BRICK_COUTN 5
+#define BRICK_ROWS 5
+#define BRICK_H_GAP 2
+#define BRICK_V_GAP 4
 
 typedef struct {
   int x;
@@ -39,14 +43,23 @@ typedef struct {
   Rect rect;
   Vec2 dir;
   wchar_t* ch;
+  int char_width;
 } Paddle;
 
 typedef struct {
   Rect rect;
   Vec2 dir;
   wchar_t* ch;
+  int char_width;
   int is_launched;
 } Ball;
+
+typedef struct {
+  Rect rect;
+  wchar_t* ch;
+  int char_width;
+  int health;
+} Brick;
 
 // Represents the window's position, size, and optional padding
 typedef struct {
@@ -91,6 +104,14 @@ void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle);
 
 void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball);
 
+void bounce_ball(Ball* ball, Rect* rect);
+
+void init_bricks(WindowConfig* win_conf, Brick* bricks, int count);
+
+void draw_bricks(WINDOW* win, Brick* bricks, int count);
+
+void handle_ball_brick_collision(Brick* bricks, int count, Ball* ball);
+
 // check if a point is coll
 int is_colliding(const Rect* a, const Rect* b);
 
@@ -133,6 +154,11 @@ int main() {
   Ball ball;
   init_ball(&ball, &paddle);
 
+  Brick bricks[BRICK_COUTN * BRICK_ROWS];
+
+  init_bricks(&game_win_conf, bricks, BRICK_COUTN);
+  draw_bricks(game_win, bricks, BRICK_COUTN);
+
   // Draw the window frame and apply the background color
   draw_window(game_win);
 
@@ -171,21 +197,9 @@ int main() {
     ball.rect.y += ball.dir.y;
 
     if (is_colliding(&ball.rect, &paddle.rect)) {
-      int paddle_left = paddle.rect.x;
-      int ball_center = ball.rect.x + ball.rect.w / 2;
-      int zone_width = paddle.rect.w / 3;
-
-      if (ball_center < paddle_left + zone_width) {
-        ball.dir.x = -1;
-      } else if (ball_center < paddle_left + (2 * zone_width)) {
-        ball.dir.x = 0;
-      } else {
-        ball.dir.x = 1;
-      }
-
-      ball.dir.y *= -1;
+      bounce_ball(&ball, &paddle.rect);
     }
-
+    handle_ball_brick_collision(bricks, BRICK_COUTN, &ball);
     keep_ball_within_bounds(&game_win_conf, &ball);
 
     // Clear previous paddle position and redraw window
@@ -193,6 +207,7 @@ int main() {
     draw_window(game_win);           // Redraw the window
     draw_paddle(game_win, &paddle);  // Draw paddle at new position
     draw_ball(game_win, &ball, &paddle);
+    draw_bricks(game_win, bricks, BRICK_COUTN);
 
     // Refresh the window to update screen
     wrefresh(game_win);
@@ -223,8 +238,8 @@ void init_ncurses() {
   nodelay(stdscr, 1);
   keypad(stdscr, 1);
   init_pair(1, COLOR_WHITE, COLOR_BLACK);
-  // init_pair(2, COLOR_BLUE, COLOR_BLACK);
-  // init_pair(3, COLOR_YELLOW, COLOR_BLACK);
+  init_pair(2, COLOR_BLUE, COLOR_BLACK);
+  init_pair(3, COLOR_YELLOW, COLOR_BLACK);
 }
 
 void kill_ncurses() {
@@ -291,8 +306,10 @@ void draw_window(WINDOW* win) {
 }
 
 void init_paddle(Paddle* paddle, WindowConfig* win_conf) {
+  paddle->char_width = wcwidth(PADDLE_CHAR[0]);
+
   paddle->ch = PADDLE_CHAR;
-  paddle->rect.w = MAX_PADDLE_SIZE;
+  paddle->rect.w = MAX_PADDLE_SIZE * paddle->char_width;
 
   paddle->rect.x = get_center_offset(win_conf->inner_rect.w, paddle->rect.w);
   paddle->rect.y = win_conf->inner_rect.h;
@@ -305,7 +322,7 @@ void draw_paddle(WINDOW* win, const Paddle* paddle) {
   cchar_t ch;
   setcchar(&ch, paddle->ch, A_NORMAL, 0, NULL);
 
-  for (int i = 0; i < paddle->rect.w; i++) {
+  for (int i = 0; i < paddle->rect.w; i += paddle->char_width) {
     mvwadd_wch(win, paddle->rect.y, paddle->rect.x + i, &ch);
   }
   wrefresh(win);
@@ -359,6 +376,93 @@ void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball) {
       ball->rect.y >= win_conf->inner_rect.h) {
     ball->dir.y *= -1;
   }
+}
+
+void bounce_ball(Ball* ball, Rect* rect) {
+  int ball_center = ball->rect.x + (ball->rect.w / 2);
+  int zone_width = rect->w / 3;
+
+  if (ball_center < rect->x + zone_width) {
+    ball->dir.x = -1;
+  } else if (ball_center < rect->x + (2 * zone_width)) {
+    ball->dir.x = 0;
+  } else {
+    ball->dir.x = 1;
+  }
+
+  ball->dir.y *= -1;
+}
+
+void init_bricks(WindowConfig* win_conf, Brick* bricks, int count) {
+  int brick_char_width = wcwidth(BRICK_STRONG[0]);
+  int total_gap = (count - 1) * BRICK_H_GAP;
+  int usable_width = win_conf->inner_rect.w - total_gap;
+  int brick_width = (usable_width / count) / brick_char_width;
+
+  for (int row = 0; row < BRICK_ROWS; row++) {
+    for (int col = 0; col < count; col++) {
+      int index = row * count + col;
+
+      bricks[index].ch = BRICK_STRONG;
+      bricks[index].char_width = wcwidth(BRICK_STRONG[0]);
+      bricks[index].rect.w = brick_width * brick_char_width;
+      bricks[index].rect.h = 1;
+      bricks[index].rect.x =
+          win_conf->inner_rect.x +
+          (col * ((brick_width * brick_char_width) + BRICK_H_GAP));
+      bricks[index].rect.y =
+          win_conf->inner_rect.y + row + (BRICK_V_GAP * (row + 1));
+      bricks[index].health = 3;
+    }
+  }
+}
+
+void handle_ball_brick_collision(Brick* bricks, int count, Ball* ball) {
+  for (int row = 0; row < BRICK_ROWS; row++) {
+    for (int col = 0; col < count; col++) {
+      int index = row * count + col;
+
+      if (is_colliding(&bricks[index].rect, &ball->rect)) {
+        if (bricks[index].health != 0) {
+          bounce_ball(ball, &bricks[index].rect);
+          if (bricks[index].health > 0) {
+            bricks[index].health--;
+          } else {
+            bricks[index].health = 0;
+          }
+        }
+      }
+    }
+  }
+}
+
+void draw_bricks(WINDOW* win, Brick* bricks, int count) {
+  int total_count = count * BRICK_ROWS;
+  for (int i = 0; i < total_count; i++) {
+    const wchar_t* ch_str;
+    switch (bricks[i].health) {
+      case 3:
+        ch_str = BRICK_STRONG;
+        break;
+      case 2:
+        ch_str = BRICK_MEDIUM;
+        break;
+      case 1:
+        ch_str = BRICK_WEAK;
+        break;
+      case 0:
+        continue;
+    }
+
+    cchar_t ch;
+    setcchar(&ch, ch_str, A_NORMAL, 0, NULL);
+
+    // int brick_ch_width
+    for (int j = 0; j < bricks[i].rect.w; j += bricks[i].char_width) {
+      mvwadd_wch(win, bricks[i].rect.y, bricks[i].rect.x + j, &ch);
+    }
+  }
+  wrefresh(win);
 }
 
 int is_colliding(const Rect* a, const Rect* b) {
