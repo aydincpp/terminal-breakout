@@ -15,9 +15,11 @@ A simple brick-breaking game playable in terminal
 - **ncurses** library
 - **UTF-8** capable terminal (for full emoji rendering)
 
-----
-<br />
-If your terminal does not support emoji or renders them incorrectly, compile using the ASCII fallback by adding the -DUSE_ASCII flag:
+***
+<br/>
+
+> If your terminal does not support emoji or renders them incorrectly, compile using the ASCII fallback by adding the -DUSE_ASCII flag:
+
 ```bash
 gcc -DUSE_ASCII -o brickout main.c -lncurses
 ```
