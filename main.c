@@ -3,6 +3,7 @@
 
 #include <locale.h>
 #include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 #include <wchar.h>
 
@@ -26,6 +27,11 @@
 #define BRICK_ROWS 5
 #define BRICK_H_GAP 2
 #define BRICK_V_GAP 4
+
+#define MAX_DROPS 20
+#define DROP_HEALT_CHAR L"❤️"
+#define DROP_BULLET_CHAR L"🔫"
+#define DROP_BOMB_CHAR L"💣"
 
 typedef struct {
   int x;
@@ -59,7 +65,17 @@ typedef struct {
   wchar_t* ch;
   int char_width;
   int health;
+  int drop_spawned;
 } Brick;
+
+typedef enum { DROP_NONE, DROP_HEALTH, DROP_BULLET, DROP_BOMB } DropType;
+
+typedef struct {
+  Rect rect;
+  wchar_t* ch;
+  int char_width;
+  DropType type;
+} Drop;
 
 // Represents the window's position, size, and optional padding
 typedef struct {
@@ -104,6 +120,8 @@ void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle);
 
 void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball);
 
+int get_random_direction();
+
 void bounce_ball(Ball* ball, Rect* rect);
 
 void init_bricks(WindowConfig* win_conf, Brick* bricks, int count);
@@ -134,6 +152,7 @@ int get_center_offset(int outer_len, int inner_len);
 int main() {
   setenv("TERMINFO", "./vendor/ncurses/build/share/terminfo", 1);
   setlocale(LC_ALL, "");
+  srand(time(NULL));
 
   init_ncurses();
   check_terminal_size();
@@ -185,7 +204,7 @@ int main() {
       case KEY_UP:
         ball.is_launched = 1;
         ball.dir.y = -1;
-        ball.dir.x = 1;
+        ball.dir.x = get_random_direction();
       default:
         break;
     }
@@ -213,7 +232,7 @@ int main() {
     wrefresh(game_win);
 
     // Small delay to improve smoothness (adjust as needed)
-    napms(1000 / 30);  // Delay for 10 milliseconds
+    napms(1000 / 24);  // Delay for 10 milliseconds
   }
 
   // End ncurses mode, performing any necessary cleanup
@@ -378,6 +397,18 @@ void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball) {
   }
 }
 
+int get_random_direction() {
+  return (rand() % 3) - 1;
+}
+
+int get_random_drop() {
+  return (rand() % 4);
+};
+
+int get_random_health() {
+  return (rand() % 3) + 1;
+}
+
 void bounce_ball(Ball* ball, Rect* rect) {
   int ball_center = ball->rect.x + (ball->rect.w / 2);
   int zone_width = rect->w / 3;
@@ -412,7 +443,8 @@ void init_bricks(WindowConfig* win_conf, Brick* bricks, int count) {
           (col * ((brick_width * brick_char_width) + BRICK_H_GAP));
       bricks[index].rect.y =
           win_conf->inner_rect.y + row + (BRICK_V_GAP * (row + 1));
-      bricks[index].health = 3;
+      bricks[index].health = get_random_health();
+      bricks[index].drop_spawned = 0;
     }
   }
 }
