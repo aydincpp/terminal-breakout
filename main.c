@@ -13,25 +13,37 @@
 #define GAME_WIDTH ((COLS % 2 == 0) ? COLS : COLS - 1)
 #define GAME_HEIGHT LINES
 
-#define PADDLE_CHAR L"🟪"
+#ifdef USE_ASCII
+    #define PADDLE_CHAR L"="
+    #define BALL_CHAR L"o"
+    #define BRICK_STRONG L"#"
+    #define BRICK_MEDIUM L"+"
+    #define BRICK_WEAK L"-"
+    #define DROP_HEALTH_CHAR L"H"
+    // #define DROP_BULLET_CHAR L"B"
+    #define DROP_EXTRA_BALL_CHAR L"E"
+    #define DROP_BOMB_CHAR L"X"
+#else
+    #define PADDLE_CHAR L"🟪"
+    #define BALL_CHAR L"⚽"
+    #define BRICK_STRONG L"🟥"
+    #define BRICK_MEDIUM L"🟧"
+    #define BRICK_WEAK L"🟨"
+    #define DROP_HEALTH_CHAR L"♥️"
+    // #define DROP_BULLET_CHAR L"🔫"
+    #define DROP_EXTRA_BALL_CHAR L"🎁"
+    #define DROP_BOMB_CHAR L"💣"
+#endif
+
 #define MIN_PADDLE_SIZE 10
 #define MAX_PADDLE_SIZE 30
 
-#define BALL_CHAR L"⚽"
 #define COLS_NOBORDER (COLS - 2)
 
-#define BRICK_STRONG L"🟥"
-#define BRICK_MEDIUM L"🟧"
-#define BRICK_WEAK L"🟨"
 #define BRICK_COUTN 5
-#define BRICK_ROWS 8
+#define BRICK_ROWS 4
 #define BRICK_H_GAP 1
 #define BRICK_V_GAP 2
-
-#define DROP_HEALT_CHAR L"❤️"
-#define DROP_BULLET_CHAR L"🔫"
-#define DROP_EXTRA_BALL_CHAR L"🎁"
-#define DROP_BOMB_CHAR L"💣"
 
 typedef struct {
   int x;
@@ -68,7 +80,7 @@ typedef struct {
 typedef enum {
   DROP_NONE,
   DROP_HEALTH,
-  // DROP_BULLET,
+  // DROP_BULLET, // too lazy to implement this one lol
   DROP_EXTRA_BALL,
   DROP_BOMB
 } DropType;
@@ -120,6 +132,8 @@ void init_game_win_Conf(WindowConfig* win_conf);
 void draw_window(WINDOW*);
 
 void draw_start_menu(WINDOW* win);
+void draw_won_menu(WINDOW* win);
+void draw_lost_menu(WINDOW* win);
 
 // Initilize paddle
 void init_paddle(Paddle* paddle, WindowConfig* win_conf);
@@ -140,6 +154,8 @@ void draw_balls(WINDOW* win, WindowConfig* win_conf, BallArray* balls,
 void keep_balls_within_bounds(WindowConfig* win_conf, BallArray* balls);
 
 int get_random_direction();
+int get_random_drop();
+int get_random_health();
 
 void bounce_ball(Ball* balls, Rect* rect);
 
@@ -207,6 +223,7 @@ int main() {
     }
   }
 
+start_game:;
   // ── Start Game ──
   Paddle paddle;
   init_paddle(&paddle, &game_win_conf);
@@ -238,7 +255,12 @@ int main() {
   nodelay(game_win, 1);
   keypad(game_win, 1);
 
-  while (ch != 'q') {
+  int no_balls_left = 0;
+  int all_bricks_destroyed = 0;
+  int game_over = 0;
+  int win = 0;
+
+  while (ch != 'q' && !game_over) {
     ch = getch();  // Get input (non-blocking)
 
     switch (ch) {
@@ -275,6 +297,24 @@ int main() {
       }
     }
 
+    if (balls.count == 0) {
+      game_over = 1;
+      no_balls_left = 1;
+    }
+
+    all_bricks_destroyed = 1;
+    for (int i = 0; i < BRICK_COUTN * BRICK_ROWS; i++) {
+      if (bricks[i].health > 0) {
+        all_bricks_destroyed = 0;
+        break;
+      }
+    }
+
+    if (all_bricks_destroyed) {
+      win = 1;
+      game_over = 1;
+    }
+
     // Clear
     wclear(game_win);
     draw_window(game_win);
@@ -287,6 +327,22 @@ int main() {
     wrefresh(game_win);
 
     napms(1000 / 24);
+  }
+
+  if (win) {
+    draw_won_menu(game_win);
+  } else {
+    draw_lost_menu(game_win);
+  }
+
+  while (1) {
+    int ch = wgetch(game_win);
+    if (ch == '1') {
+      menu_choice = 1;
+      goto start_game;
+    } else if (ch == '2' || ch == 'q') {
+      break;
+    }
   }
 
   cleanup(&balls);
@@ -420,6 +476,87 @@ void draw_start_menu(WINDOW* win) {
   wrefresh(win);
 }
 
+void draw_won_menu(WINDOW* win) {
+  const wchar_t* art[] = {
+      L"▄██   ▄    ▄██████▄  ███    █▄        ▄█     █▄   ▄██████▄  ███▄▄▄▄   ",
+      L"███   ██▄ ███    ███ ███    ███      ███     ███ ███    ███ ███▀▀▀██▄ ",
+      L"███▄▄▄███ ███    ███ ███    ███      ███     ███ ███    ███ ███   ███ ",
+      L"▀▀▀▀▀▀███ ███    ███ ███    ███      ███     ███ ███    ███ ███   ███ ",
+      L"▄██   ███ ███    ███ ███    ███      ███     ███ ███    ███ ███   ███ ",
+      L"███   ███ ███    ███ ███    ███      ███     ███ ███    ███ ███   ███ ",
+      L"███   ███ ███    ███ ███    ███      ███ ▄█▄ ███ ███    ███ ███   ███ ",
+      L" ▀█████▀   ▀██████▀  ████████▀        ▀███▀███▀   ▀██████▀   ▀█   █▀ "
+      L" "};
+
+  const int art_lines = sizeof(art) / sizeof(art[0]);
+
+  const char* option1 = "1. Play Again";
+  const char* option2 = "2. Quit";
+
+  werase(win);
+
+  int start_y = (GAME_HEIGHT - art_lines - 4) / 2;
+  for (int i = 0; i < art_lines; ++i) {
+    int art_width = wcswidth(art[i], wcslen(art[i]));
+    int art_x = (GAME_WIDTH - art_width) / 2;
+    mvwprintw(win, start_y + i, art_x, "%ls", art[i]);
+  }
+
+  int menu_y = start_y + art_lines;
+  int opt1_x = (GAME_WIDTH - strlen(option1)) / 2;
+  int opt2_x = (GAME_WIDTH - strlen(option2)) / 2;
+
+  mvwprintw(win, menu_y + 1, opt1_x, "%s", option1);
+  mvwprintw(win, menu_y + 2, opt2_x, "%s", option2);
+
+  wrefresh(win);
+}
+
+void draw_lost_menu(WINDOW* win) {
+  const wchar_t* art[] = {
+      L"▄██   ▄    ▄██████▄  ███    █▄        ▄█        ▄██████▄     ▄████████ "
+      L"    ███     ",
+      L"███   ██▄ ███    ███ ███    ███      ███       ███    ███   ███    ███ "
+      L"▀█████████▄ ",
+      L"███▄▄▄███ ███    ███ ███    ███      ███       ███    ███   ███    █▀  "
+      L"   ▀███▀▀██ ",
+      L"▀▀▀▀▀▀███ ███    ███ ███    ███      ███       ███    ███   ███        "
+      L"    ███   ▀ ",
+      L"▄██   ███ ███    ███ ███    ███      ███       ███    ███ ▀███████████ "
+      L"    ███     ",
+      L"███   ███ ███    ███ ███    ███      ███       ███    ███          ███ "
+      L"    ███     ",
+      L"███   ███ ███    ███ ███    ███      ███▌    ▄ ███    ███    ▄█    ███ "
+      L"    ███     ",
+      L" ▀█████▀   ▀██████▀  ████████▀       █████▄▄██  ▀██████▀   ▄████████▀  "
+      L"   ▄████▀   ",
+      L"                                     ▀                                 "
+      L"             "};
+
+  const int art_lines = sizeof(art) / sizeof(art[0]);
+
+  const char* option1 = "1. Try Again";
+  const char* option2 = "2. Quit";
+
+  werase(win);
+
+  int start_y = (GAME_HEIGHT - art_lines - 4) / 2;
+  for (int i = 0; i < art_lines; ++i) {
+    int art_width = wcswidth(art[i], wcslen(art[i]));
+    int art_x = (GAME_WIDTH - art_width) / 2;
+    mvwprintw(win, start_y + i, art_x, "%ls", art[i]);
+  }
+
+  int menu_y = start_y + art_lines;
+  int opt1_x = (GAME_WIDTH - strlen(option1)) / 2;
+  int opt2_x = (GAME_WIDTH - strlen(option2)) / 2;
+
+  mvwprintw(win, menu_y + 1, opt1_x, "%s", option1);
+  mvwprintw(win, menu_y + 2, opt2_x, "%s", option2);
+
+  wrefresh(win);
+}
+
 void init_paddle(Paddle* paddle, WindowConfig* win_conf) {
   paddle->char_width = wcwidth(PADDLE_CHAR[0]);
   paddle->ch = PADDLE_CHAR;
@@ -514,7 +651,10 @@ void keep_balls_within_bounds(WindowConfig* win_conf, BallArray* balls) {
 
 int get_random_direction() { return (rand() % 3) - 1; }
 
-int get_random_drop() { return (rand() % 4); };
+int get_random_drop() {
+  // return (rand() % 2);
+  return 1;
+   };
 
 int get_random_health() { return (rand() % 3) + 1; }
 
@@ -561,8 +701,8 @@ void init_bricks(WindowConfig* win_conf, Brick* bricks, int count) {
       bricks[index].drop.none = 0;
       switch (bricks[index].drop.type) {
         case DROP_HEALTH:
-          bricks[index].drop.ch = DROP_HEALT_CHAR;
-          bricks[index].drop.char_width = wcwidth(DROP_HEALT_CHAR[0]);
+          bricks[index].drop.ch = DROP_HEALTH_CHAR;
+          bricks[index].drop.char_width = wcwidth(DROP_HEALTH_CHAR[0]);
           break;
 
           // case DROP_BULLET:
