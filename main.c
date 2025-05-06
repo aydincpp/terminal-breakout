@@ -2,20 +2,20 @@
 #define _XOPEN_SOURCE 700
 
 #include <locale.h>
+#include <ncurses.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
 
-#include "ncursesw/curses.h"
-
 // Define desired game window dimension
-#define GAME_WIDTH 120
-#define GAME_HEIGHT 50
+#define GAME_WIDTH ((COLS % 2 == 0) ? COLS : COLS - 1)
+#define GAME_HEIGHT LINES
 
-#define MIN_PADDLE_SIZE 14
-#define MAX_PADDLE_SIZE 18
 #define PADDLE_CHAR L"🟪"
+#define MIN_PADDLE_SIZE 10
+#define MAX_PADDLE_SIZE 30
 
 #define BALL_CHAR L"⚽"
 #define COLS_NOBORDER (COLS - 2)
@@ -24,13 +24,13 @@
 #define BRICK_MEDIUM L"🟧"
 #define BRICK_WEAK L"🟨"
 #define BRICK_COUTN 5
-#define BRICK_ROWS 5
-#define BRICK_H_GAP 2
-#define BRICK_V_GAP 4
+#define BRICK_ROWS 8
+#define BRICK_H_GAP 1
+#define BRICK_V_GAP 2
 
-#define MAX_DROPS 20
 #define DROP_HEALT_CHAR L"❤️"
 #define DROP_BULLET_CHAR L"🔫"
+#define DROP_EXTRA_BALL_CHAR L"🎁"
 #define DROP_BOMB_CHAR L"💣"
 
 typedef struct {
@@ -61,21 +61,35 @@ typedef struct {
 } Ball;
 
 typedef struct {
-  Rect rect;
-  wchar_t* ch;
-  int char_width;
-  int health;
-  int drop_spawned;
-} Brick;
+  Ball** items;
+  int count;
+} BallArray;
 
-typedef enum { DROP_NONE, DROP_HEALTH, DROP_BULLET, DROP_BOMB } DropType;
+typedef enum {
+  DROP_NONE,
+  DROP_HEALTH,
+  // DROP_BULLET,
+  DROP_EXTRA_BALL,
+  DROP_BOMB
+} DropType;
 
 typedef struct {
   Rect rect;
+  DropType type;
   wchar_t* ch;
   int char_width;
-  DropType type;
+  int spawned;
+  int life;
+  int none;
 } Drop;
+
+typedef struct {
+  Rect rect;
+  Drop drop;
+  wchar_t* ch;
+  int char_width;
+  int health;
+} Brick;
 
 // Represents the window's position, size, and optional padding
 typedef struct {
@@ -91,6 +105,8 @@ void init_ncurses();
 // Ends ncurses mode and cleans up any ncurses-specific resources
 void kill_ncurses();
 
+void cleanup(BallArray* balls);
+
 // Checks if terminal size can fit the game window dimensions
 void check_terminal_size();
 
@@ -102,6 +118,8 @@ void init_game_win_Conf(WindowConfig* win_conf);
 
 // Draws the window frame (border) and applies background color
 void draw_window(WINDOW*);
+
+void draw_start_menu(WINDOW* win);
 
 // Initilize paddle
 void init_paddle(Paddle* paddle, WindowConfig* win_conf);
@@ -116,19 +134,26 @@ void clamp_paddle_bounds(WindowConfig* win_conf, Paddle* paddle);
 void init_ball(Ball* ball, Paddle* paddle);
 
 // Draw the ball
-void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle);
+void draw_balls(WINDOW* win, WindowConfig* win_conf, BallArray* balls,
+                Paddle* paddle);
 
-void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball);
+void keep_balls_within_bounds(WindowConfig* win_conf, BallArray* balls);
 
 int get_random_direction();
 
-void bounce_ball(Ball* ball, Rect* rect);
+void bounce_ball(Ball* balls, Rect* rect);
 
 void init_bricks(WindowConfig* win_conf, Brick* bricks, int count);
 
 void draw_bricks(WINDOW* win, Brick* bricks, int count);
 
-void handle_ball_brick_collision(Brick* bricks, int count, Ball* ball);
+void draw_drop(WINDOW* win, WindowConfig* win_conf, Brick* bricks,
+               Paddle* paddle, int count, BallArray* balls);
+
+void resolve_drop_paddle_collision(Drop* drop, Paddle* paddle,
+                                   BallArray* balls);
+
+void resolve_balls_brick_collision(Brick* bricks, int count, BallArray* balls);
 
 // check if a point is coll
 int is_colliding(const Rect* a, const Rect* b);
@@ -150,7 +175,7 @@ int get_inner_window_height(WindowConfig* win_conf);
 int get_center_offset(int outer_len, int inner_len);
 
 int main() {
-  setenv("TERMINFO", "./vendor/ncurses/build/share/terminfo", 1);
+  // setenv("TERMINFO", "./vendor/ncurses/build/share/terminfo", 1);
   setlocale(LC_ALL, "");
   srand(time(NULL));
 
@@ -167,15 +192,37 @@ int main() {
                             game_win_conf.rect.y, game_win_conf.rect.x);
   VALIDATE(game_win);
 
+  // ── Draw and handle start menu ──
+  draw_start_menu(game_win);
+  int menu_choice = 0;
+
+  while (1) {
+    int ch = wgetch(game_win);
+    if (ch == '1') {
+      menu_choice = 1;  // Start game
+      break;
+    } else if (ch == '2' || ch == 'q') {
+      kill_ncurses();
+      return 0;
+    }
+  }
+
+  // ── Start Game ──
   Paddle paddle;
   init_paddle(&paddle, &game_win_conf);
 
-  Ball ball;
-  init_ball(&ball, &paddle);
+  BallArray balls;
+  balls.count = 1;
+  balls.items = malloc(sizeof(Ball*) * balls.count);
+  for (int i = 0; i < balls.count; i++) {
+    balls.items[i] = malloc(sizeof(Ball));
+  }
 
-  Brick bricks[BRICK_COUTN * BRICK_ROWS];
+  init_ball(balls.items[balls.count - 1], &paddle);
 
+  Brick bricks[BRICK_COUTN * BRICK_ROWS] = {0};
   init_bricks(&game_win_conf, bricks, BRICK_COUTN);
+
   draw_bricks(game_win, bricks, BRICK_COUTN);
 
   // Draw the window frame and apply the background color
@@ -185,7 +232,7 @@ int main() {
   draw_paddle(game_win, &paddle);
 
   // Draw the ball at the start
-  draw_ball(game_win, &ball, &paddle);
+  draw_balls(game_win, &game_win_conf, &balls, &paddle);
 
   int ch = 0;
   nodelay(game_win, 1);
@@ -202,43 +249,49 @@ int main() {
         paddle.dir.x = 1;
         break;
       case KEY_UP:
-        ball.is_launched = 1;
-        ball.dir.y = -1;
-        ball.dir.x = get_random_direction();
+
+        for (int i = 0; i < balls.count; i++) {
+          if (balls.items[i]->is_launched == 0) {
+            balls.items[i]->is_launched = 1;
+            balls.items[i]->dir.y = -1;
+            balls.items[i]->dir.x = get_random_direction();
+          }
+        }
       default:
         break;
     }
 
     paddle.rect.x += paddle.dir.x;
     clamp_paddle_bounds(&game_win_conf, &paddle);
+    resolve_balls_brick_collision(bricks, BRICK_COUTN, &balls);
+    keep_balls_within_bounds(&game_win_conf, &balls);
 
-    ball.rect.x += ball.dir.x;
-    ball.rect.y += ball.dir.y;
+    for (int i = 0; i < balls.count; i++) {
+      balls.items[i]->rect.x += balls.items[i]->dir.x;
+      balls.items[i]->rect.y += balls.items[i]->dir.y;
 
-    if (is_colliding(&ball.rect, &paddle.rect)) {
-      bounce_ball(&ball, &paddle.rect);
+      if (is_colliding(&balls.items[i]->rect, &paddle.rect)) {
+        bounce_ball(balls.items[i], &paddle.rect);
+      }
     }
-    handle_ball_brick_collision(bricks, BRICK_COUTN, &ball);
-    keep_ball_within_bounds(&game_win_conf, &ball);
 
-    // Clear previous paddle position and redraw window
+    // Clear
     wclear(game_win);
-    draw_window(game_win);           // Redraw the window
-    draw_paddle(game_win, &paddle);  // Draw paddle at new position
-    draw_ball(game_win, &ball, &paddle);
+    draw_window(game_win);
+    draw_paddle(game_win, &paddle);
+    draw_balls(game_win, &game_win_conf, &balls, &paddle);
     draw_bricks(game_win, bricks, BRICK_COUTN);
+    draw_drop(game_win, &game_win_conf, bricks, &paddle, BRICK_COUTN, &balls);
 
     // Refresh the window to update screen
     wrefresh(game_win);
 
-    // Small delay to improve smoothness (adjust as needed)
-    napms(1000 / 24);  // Delay for 10 milliseconds
+    napms(1000 / 24);
   }
 
-  // End ncurses mode, performing any necessary cleanup
+  cleanup(&balls);
   kill_ncurses();
 
-  // Return EXIT_SUCCESS to indicate the program ended successfully
   return EXIT_SUCCESS;
 }
 
@@ -257,12 +310,17 @@ void init_ncurses() {
   nodelay(stdscr, 1);
   keypad(stdscr, 1);
   init_pair(1, COLOR_WHITE, COLOR_BLACK);
-  init_pair(2, COLOR_BLUE, COLOR_BLACK);
-  init_pair(3, COLOR_YELLOW, COLOR_BLACK);
 }
 
 void kill_ncurses() {
   endwin();  // End ncurses mode
+}
+
+void cleanup(BallArray* balls) {
+  for (int i = 0; i < balls->count; i++) {
+    free(balls->items[i]);
+    balls->items[i] = NULL;
+  }
 }
 
 void check_terminal_size() {
@@ -288,24 +346,22 @@ void check_terminal_size() {
 
 void setup_background_color() {
   // Set the background color using color pair 1 (as defined with init_pair())
-  bkgd(COLOR_PAIR(1));
+  bkgd(COLOR_PAIR(3));
 
   // Refresh the screen to apply the background color change
   refresh();
 }
 
 void init_game_win_Conf(WindowConfig* win_conf) {
-  // Set the window padding
   win_conf->padding.x = 0;
   win_conf->padding.y = 0;
 
-  win_conf->rect.w = GAME_WIDTH;   // Set the window width
-  win_conf->rect.h = GAME_HEIGHT;  // Set the window height
+  win_conf->rect.w = GAME_WIDTH;
+  win_conf->rect.h = GAME_HEIGHT;
 
   win_conf->inner_rect.w = get_inner_window_width(win_conf);
   win_conf->inner_rect.h = get_inner_window_height(win_conf);
 
-  // Center the window horizontally and vertically in the terminal
   win_conf->rect.x = get_center_offset(COLS, win_conf->rect.w);
   win_conf->rect.y = get_center_offset(LINES, win_conf->rect.h);
 
@@ -314,21 +370,64 @@ void init_game_win_Conf(WindowConfig* win_conf) {
 }
 
 void draw_window(WINDOW* win) {
-  // Draw a border around the given window using default line characters
-  box(win, 0, 0);
-
-  // Set the window's background using color pair 1
   wbkgd(win, COLOR_PAIR(1));
+  // box(win, 0, 0);
+  wrefresh(win);
+}
 
-  // Refresh the window to apply the border and background changes
+void draw_start_menu(WINDOW* win) {
+  const wchar_t* art[] = {
+      L"▀█████████▄     ▄████████  ▄█   ▄████████    ▄█   ▄█▄  ▄██████▄  ███   "
+      L" █▄      ███     ",
+      L"  ███    ███   ███    ███ ███  ███    ███   ███ ▄███▀ ███    ███ ███   "
+      L" ███ ▀█████████▄ ",
+      L"  ███    ███   ███    ███ ███▌ ███    █▀    ███▐██▀   ███    ███ ███   "
+      L" ███    ▀███▀▀██ ",
+      L" ▄███▄▄▄██▀   ▄███▄▄▄▄██▀ ███▌ ███         ▄█████▀    ███    ███ ███   "
+      L" ███     ███   ▀ ",
+      L"▀▀███▀▀▀██▄  ▀▀███▀▀▀▀▀   ███▌ ███        ▀▀█████▄    ███    ███ ███   "
+      L" ███     ███     ",
+      L"  ███    ██▄ ▀███████████ ███  ███    █▄    ███▐██▄   ███    ███ ███   "
+      L" ███     ███     ",
+      L"  ███    ███   ███    ███ ███  ███    ███   ███ ▀███▄ ███    ███ ███   "
+      L" ███     ███     ",
+      L"▄█████████▀    ███    ███ █▀   ████████▀    ███   ▀█▀  ▀██████▀  "
+      L"████████▀     ▄████▀   ",
+      L"               ███    ███                   ▀                          "
+      L"                  "};
+
+  const int art_lines = sizeof(art) / sizeof(art[0]);
+
+  const char* option1 = "1. Start Game";
+  const char* option2 = "2. Quit      ";
+
+  werase(win);
+
+  int start_y = (GAME_HEIGHT - art_lines - 4) / 2;
+  for (int i = 0; i < art_lines; ++i) {
+    int art_width = wcswidth(art[i], wcslen(art[i]));
+    int art_x = (GAME_WIDTH - art_width) / 2;
+    mvwprintw(win, start_y + i, art_x, "%ls", art[i]);
+  }
+
+  int menu_y = start_y + art_lines;
+  int opt1_x = (GAME_WIDTH - strlen(option1)) / 2;
+  int opt2_x = (GAME_WIDTH - strlen(option2)) / 2;
+
+  mvwprintw(win, menu_y + 1, opt1_x, "%s", option1);
+  mvwprintw(win, menu_y + 2, opt2_x, "%s", option2);
+
   wrefresh(win);
 }
 
 void init_paddle(Paddle* paddle, WindowConfig* win_conf) {
   paddle->char_width = wcwidth(PADDLE_CHAR[0]);
-
   paddle->ch = PADDLE_CHAR;
-  paddle->rect.w = MAX_PADDLE_SIZE * paddle->char_width;
+
+  // paddle->rect.w = MAX_PADDLE_SIZE * paddle->char_width;
+  paddle->rect.w =
+      ((MAX_PADDLE_SIZE + MIN_PADDLE_SIZE) / 2) * paddle->char_width;
+  paddle->rect.h = 1;
 
   paddle->rect.x = get_center_offset(win_conf->inner_rect.w, paddle->rect.w);
   paddle->rect.y = win_conf->inner_rect.h;
@@ -365,49 +464,59 @@ void init_ball(Ball* ball, Paddle* paddle) {
 
   ball->rect.x = paddle->rect.x + (paddle->rect.w / 3);
   ball->rect.y = paddle->rect.y - 1;
-  ball->rect.w = wcwidth(ball->ch[0]);
+  ball->rect.w = wcwidth(BALL_CHAR[0]);
   ball->rect.h = 1;
 
   ball->is_launched = 0;
 }
 
-void draw_ball(WINDOW* win, Ball* ball, Paddle* paddle) {
-  cchar_t ch;
-  setcchar(&ch, ball->ch, A_NORMAL, 0, NULL);
+void draw_balls(WINDOW* win, WindowConfig* win_conf, BallArray* balls,
+                Paddle* paddle) {
+  for (int i = 0; i < balls->count; i++) {
+    cchar_t ch;
+    setcchar(&ch, balls->items[i]->ch, A_NORMAL, 0, NULL);
 
-  if (ball->is_launched == 0) {
-    ball->rect.x = paddle->rect.x + (paddle->rect.w / 2) - 1;
-    ball->rect.y = paddle->rect.y - 1;
+    if (balls->items[i]->is_launched == 0) {
+      balls->items[i]->rect.x = paddle->rect.x + (paddle->rect.w / 2) - 1;
+      balls->items[i]->rect.y = paddle->rect.y - 1;
+    }
+
+    if (balls->items[i]->rect.y >= win_conf->inner_rect.h) {
+      free(balls->items[i]);
+      for (int j = i; j < balls->count - 1; j++) {
+        balls->items[j] = balls->items[j + 1];
+      }
+      balls->count--;
+      i--;
+
+      continue;
+    }
+
+    mvwadd_wch(win, balls->items[i]->rect.y, balls->items[i]->rect.x, &ch);
+
+    wrefresh(win);
   }
-
-  mvwadd_wch(win, ball->rect.y, ball->rect.x, &ch);
-
-  wrefresh(win);
 }
 
-void keep_ball_within_bounds(WindowConfig* win_conf, Ball* ball) {
-  if (ball->rect.x <= win_conf->inner_rect.x ||
-      ball->rect.x >= win_conf->inner_rect.w) {
-    ball->dir.x *= -1;
-  }
+void keep_balls_within_bounds(WindowConfig* win_conf, BallArray* balls) {
+  for (int i = 0; i < balls->count; i++) {
+    if (balls->items[i]->rect.x <= win_conf->inner_rect.x ||
+        balls->items[i]->rect.x >= win_conf->inner_rect.w) {
+      balls->items[i]->dir.x *= -1;
+    }
 
-  if (ball->rect.y <= win_conf->inner_rect.y ||
-      ball->rect.y >= win_conf->inner_rect.h) {
-    ball->dir.y *= -1;
+    if (balls->items[i]->rect.y <= win_conf->inner_rect.y ||
+        balls->items[i]->rect.y >= win_conf->inner_rect.h) {
+      balls->items[i]->dir.y *= -1;
+    }
   }
 }
 
-int get_random_direction() {
-  return (rand() % 3) - 1;
-}
+int get_random_direction() { return (rand() % 3) - 1; }
 
-int get_random_drop() {
-  return (rand() % 4);
-};
+int get_random_drop() { return (rand() % 4); };
 
-int get_random_health() {
-  return (rand() % 3) + 1;
-}
+int get_random_health() { return (rand() % 3) + 1; }
 
 void bounce_ball(Ball* ball, Rect* rect) {
   int ball_center = ball->rect.x + (ball->rect.w / 2);
@@ -444,23 +553,68 @@ void init_bricks(WindowConfig* win_conf, Brick* bricks, int count) {
       bricks[index].rect.y =
           win_conf->inner_rect.y + row + (BRICK_V_GAP * (row + 1));
       bricks[index].health = get_random_health();
-      bricks[index].drop_spawned = 0;
+
+      // initilizing drop
+      bricks[index].drop.type = get_random_drop();
+      bricks[index].drop.spawned = 0;
+      bricks[index].drop.life = 1;
+      bricks[index].drop.none = 0;
+      switch (bricks[index].drop.type) {
+        case DROP_HEALTH:
+          bricks[index].drop.ch = DROP_HEALT_CHAR;
+          bricks[index].drop.char_width = wcwidth(DROP_HEALT_CHAR[0]);
+          break;
+
+          // case DROP_BULLET:
+          //   bricks[index].drop.ch = DROP_BULLET_CHAR;
+          //   bricks[index].drop.char_width = wcwidth(DROP_BULLET_CHAR[0]);
+          //   break;
+
+        case DROP_EXTRA_BALL:
+          bricks[index].drop.ch = DROP_EXTRA_BALL_CHAR;
+          bricks[index].drop.char_width = wcwidth(DROP_EXTRA_BALL_CHAR[0]);
+          break;
+
+        case DROP_BOMB:
+          bricks[index].drop.ch = DROP_BOMB_CHAR;
+          bricks[index].drop.char_width = wcwidth(DROP_BOMB_CHAR[0]);
+          break;
+
+        case DROP_NONE:
+          bricks[index].drop.none = 1;
+          break;
+      }
+
+      if (!bricks[index].drop.none) {
+        bricks[index].drop.rect.w = bricks[index].drop.char_width;
+        bricks[index].drop.rect.h = 1;
+        bricks[index].drop.rect.x =
+            bricks[index].rect.x + (bricks[index].rect.w / 2);
+        bricks[index].drop.rect.y = bricks[index].rect.y + bricks[index].rect.h;
+      }
     }
   }
 }
 
-void handle_ball_brick_collision(Brick* bricks, int count, Ball* ball) {
-  for (int row = 0; row < BRICK_ROWS; row++) {
-    for (int col = 0; col < count; col++) {
-      int index = row * count + col;
+void resolve_balls_brick_collision(Brick* bricks, int count, BallArray* balls) {
+  for (int i = 0; i < balls->count; i++) {
+    for (int row = 0; row < BRICK_ROWS; row++) {
+      for (int col = 0; col < count; col++) {
+        int index = row * count + col;
 
-      if (is_colliding(&bricks[index].rect, &ball->rect)) {
-        if (bricks[index].health != 0) {
-          bounce_ball(ball, &bricks[index].rect);
-          if (bricks[index].health > 0) {
-            bricks[index].health--;
-          } else {
-            bricks[index].health = 0;
+        if (is_colliding(&bricks[index].rect, &balls->items[i]->rect)) {
+          if (bricks[index].health != 0) {
+            bounce_ball(balls->items[i], &bricks[index].rect);
+            if (bricks[index].health > 0) {
+              bricks[index].health--;
+            } else {
+              bricks[index].health = 0;
+            }
+          }
+
+          if (bricks[index].health == 0 && bricks[index].drop.spawned == 0 &&
+              bricks[index].drop.life == 1) {
+            bricks[index].drop.spawned = 1;
           }
         }
       }
@@ -489,12 +643,75 @@ void draw_bricks(WINDOW* win, Brick* bricks, int count) {
     cchar_t ch;
     setcchar(&ch, ch_str, A_NORMAL, 0, NULL);
 
-    // int brick_ch_width
     for (int j = 0; j < bricks[i].rect.w; j += bricks[i].char_width) {
       mvwadd_wch(win, bricks[i].rect.y, bricks[i].rect.x + j, &ch);
     }
   }
   wrefresh(win);
+}
+
+void draw_drop(WINDOW* win, WindowConfig* win_conf, Brick* bricks,
+               Paddle* paddle, int count, BallArray* balls) {
+  int total_count = count * BRICK_ROWS;
+  for (int i = 0; i < total_count; i++) {
+    if (bricks[i].health == 0 && bricks[i].drop.spawned &&
+        !bricks[i].drop.none && bricks[i].drop.life == 1) {
+      cchar_t ch;
+      setcchar(&ch, bricks[i].drop.ch, A_NORMAL, 0, NULL);
+
+      for (int j = 0; j < bricks[i].drop.rect.w;
+           j += bricks[i].drop.char_width) {
+        mvwadd_wch(win, bricks[i].drop.rect.y, bricks[i].drop.rect.x + j, &ch);
+      }
+      bricks[i].drop.rect.y++;
+      if (bricks[i].drop.rect.y >=
+          win_conf->inner_rect.y + win_conf->inner_rect.h) {
+        bricks[i].drop.life = 0;
+      }
+      resolve_drop_paddle_collision(&bricks[i].drop, paddle, balls);
+    }
+  }
+  wrefresh(win);
+}
+
+void resolve_drop_paddle_collision(Drop* drop, Paddle* paddle,
+                                   BallArray* balls) {
+  if (drop->life == 1) {
+    if (is_colliding(&drop->rect, &paddle->rect)) {
+      drop->life = 0;
+      switch (drop->type) {
+        case DROP_HEALTH:
+          if (paddle->rect.w < MAX_PADDLE_SIZE * paddle->char_width) {
+            paddle->rect.w += 5;
+          }
+          break;
+
+          // case DROP_BULLET:
+          //   break;
+
+        case DROP_EXTRA_BALL:
+          balls->items =
+              realloc(balls->items, sizeof(Ball*) * (balls->count + 1));
+          VALIDATE(balls->items);
+
+          balls->items[balls->count] = malloc(sizeof(Ball));
+          VALIDATE(balls->items[balls->count]);
+          init_ball(balls->items[balls->count], paddle);
+
+          balls->count++;
+          break;
+
+        case DROP_BOMB:
+          if (paddle->rect.w > MIN_PADDLE_SIZE * paddle->char_width) {
+            paddle->rect.w -= 5;
+          }
+          break;
+
+        default:
+          break;
+      }
+    }
+  }
 }
 
 int is_colliding(const Rect* a, const Rect* b) {
@@ -520,16 +737,10 @@ void validate_ptr(void* ptr, const char* name) {
 }
 
 int get_inner_window_width(WindowConfig* win_conf) {
-  // Calculate the usable width inside the window by subtracting:
-  // - 2 units for the left and right borders
-  // - padding on both sides (padding * 2)
   return win_conf->rect.w - ((win_conf->padding.x * 2) + 2);
 }
 
 int get_inner_window_height(WindowConfig* win_conf) {
-  // Calculate the usable height inside the window by subtracting:
-  // - 2 units for the top and bottom borders
-  // - padding on both sides (padding * 2)
   return win_conf->rect.h - ((win_conf->padding.y * 2) + 2);
 }
 

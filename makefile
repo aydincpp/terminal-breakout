@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -Ivendor/ncurses/build/include
-LDFLAGS = -static -Lvendor/ncurses/build/lib -lncursesw -ltinfow
+CFLAGS = -Wall -Wextra
+LDFLAGS = -lncursesw
 TARGET = main
 SRC = main.c
 
