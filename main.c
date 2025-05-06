@@ -39,7 +39,7 @@
 #define COLS_NOBORDER (COLS - 2)
 
 #define BRICK_COUTN 5
-#define BRICK_ROWS 4
+#define BRICK_ROWS 5
 #define BRICK_H_GAP 1
 #define BRICK_V_GAP 2
 
