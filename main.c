@@ -20,7 +20,6 @@
     #define BRICK_MEDIUM L"+"
     #define BRICK_WEAK L"-"
     #define DROP_HEALTH_CHAR L"H"
-    // #define DROP_BULLET_CHAR L"B"
     #define DROP_EXTRA_BALL_CHAR L"E"
     #define DROP_BOMB_CHAR L"X"
 #else
@@ -30,7 +29,6 @@
     #define BRICK_MEDIUM L"🟧"
     #define BRICK_WEAK L"🟨"
     #define DROP_HEALTH_CHAR L"♥️"
-    // #define DROP_BULLET_CHAR L"🔫"
     #define DROP_EXTRA_BALL_CHAR L"🎁"
     #define DROP_BOMB_CHAR L"💣"
 #endif
@@ -80,7 +78,6 @@ typedef struct {
 typedef enum {
   DROP_NONE,
   DROP_HEALTH,
-  // DROP_BULLET, // too lazy to implement this one lol
   DROP_EXTRA_BALL,
   DROP_BOMB
 } DropType;
@@ -652,9 +649,8 @@ void keep_balls_within_bounds(WindowConfig* win_conf, BallArray* balls) {
 int get_random_direction() { return (rand() % 3) - 1; }
 
 int get_random_drop() {
-  // return (rand() % 2);
-  return 1;
-   };
+  return (rand() % 4);
+}
 
 int get_random_health() { return (rand() % 3) + 1; }
 
